@@ -2,11 +2,14 @@ import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from guard.pii import mask_pii
+
 # Куда стучаться к нейросети и какую модель просить
 OLLAMA_URL = "http://localhost:11434/api/chat"
-# это само наше приложение
-app=FastAPI(title = "Дорама-GPT")
 MODEL = "qwen2.5:7b"
+
+# это само наше приложение
+app = FastAPI(title="Дорама-GPT")
 
 
 class ChatRequest(BaseModel):
@@ -15,8 +18,10 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """Что возвращает сервер: ответ нейросети. Как готовое блюдо на тарелке."""
+    """Что возвращает сервер: ответ нейросети и что сделал Guard."""
     answer: str
+    masked_question: str  # что на самом деле ушло в нейросеть
+    pii_found: list[str]  # какие метки поставили (только метки, без самих данных!)
 
 
 @app.get("/health")
@@ -27,14 +32,16 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """Передаёт вопрос в Ollama и возвращает ответ"""
+    """Прячет личные данные, передаёт вопрос в Ollama и возвращает ответ"""
+    masked, found = mask_pii(req.message)  # Guard входа: прячем личные данные
+
     payload = {
         "model": MODEL,
         "messages": [
             # system: инструкция для модели, кем ей быть (клиент её не видит)
             {"role": "system", "content": "Ты помощник, который советует дорамы. Отвечай по-русски, коротко."},
-            # user: сам вопрос пользователя
-            {"role": "user", "content": req.message},
+            # user: вопрос пользователя, уже БЕЗ личных данных
+            {"role": "user", "content": masked},
         ],
         "stream": False,  # получить ответ целиком, а не по кусочкам
     }
@@ -42,5 +49,9 @@ async def chat(req: ChatRequest):
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(OLLAMA_URL, json=payload)
         r.raise_for_status()  # если Ollama ответила ошибкой, сразу сообщить
-    return ChatResponse(answer=r.json()["message"]["content"])
 
+    return ChatResponse(
+        answer=r.json()["message"]["content"],
+        masked_question=masked,
+        pii_found=list(found.keys()),
+    )
