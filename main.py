@@ -2,7 +2,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
-
+from guard.quota import add_tokens, check_and_count_request, get_usage
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user
 from guard.pii import mask_pii
 
@@ -26,6 +26,7 @@ class ChatResponse(BaseModel):
     model: str            # какая модель ответила
     masked_question: str  # что на самом деле ушло в нейросеть
     pii_found: list[str]  # какие метки поставили (только метки, без самих данных!)
+    tokens_used: int      # сколько LLM-токенов ушло на этот запрос
 
 
 async def fetch_models() -> list[str]:
@@ -56,6 +57,11 @@ def me(user: dict = Depends(get_current_user)):
     """Кто я: данные из токена"""
     return user
 
+@app.get("/usage")
+async def usage(user: dict = Depends(get_current_user)):
+    """Сколько запросов и LLM-токенов я потратила сегодня"""
+    return await get_usage(user["username"], user["role"])
+
 @app.get("/models")
 async def list_models(user: dict = Depends(get_current_user)) -> list[str]:
     """Список моделей, доступных роли пользователя"""
@@ -71,6 +77,8 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     # Модель есть, но роли она не разрешена — 403
     if req.model not in ROLE_MODELS[user["role"]]:
         raise HTTPException(status_code=403, detail=f"Роли '{user['role']}' модель '{req.model}' запрещена")
+    # Квота: +1 запрос; если лимит исчерпан — 429
+    await check_and_count_request(user["username"], user["role"])
 
     masked, found = mask_pii(req.message)  # Guard входа: прячем личные данные
 
@@ -89,9 +97,16 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         r = await client.post(f"{OLLAMA_BASE}/api/chat", json=payload)
         r.raise_for_status()  # если Ollama ответила ошибкой, сразу сообщить
 
+    data = r.json()
+    # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
+    tokens = data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+    await add_tokens(user["username"], tokens)
+    await add_tokens(user["username"], tokens)
+
     return ChatResponse(
-        answer=r.json()["message"]["content"],
+        answer=data["message"]["content"],
         model=req.model,
         masked_question=masked,
         pii_found=list(found.keys()),
+        tokens_used=tokens,
     )

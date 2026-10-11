@@ -8,3 +8,5 @@ pyjwt            # создание и проверка JWT-токенов
 bcrypt           # хеширование паролей
 python-multipart # чтобы FastAPI принимал форму логина
 python-dotenv    # чтение секретов из файла .env
+
+redis  # клиент для Redis
