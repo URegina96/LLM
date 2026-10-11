@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from langfuse import propagate_attributes
 from pydantic import BaseModel
 
+from dramas.catalog import build_system_prompt, search
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user, require_admin
 from guard.output import guard_output
 from guard.pii import mask_pii
@@ -32,6 +33,7 @@ class ChatResponse(BaseModel):
     masked_question: str   # что на самом деле ушло в нейросеть
     pii_found: list[str]   # какие метки поставили (только метки, без самих данных!)
     pii_leaked: list[str]  # какие ПД Guard выхода нашёл и спрятал в ответе модели
+    sources: list[dict]    # дорамы из каталога, которые получила модель (название, год, рейтинг, ссылка)
     tokens_used: int       # сколько LLM-токенов ушло на этот запрос
 
 
@@ -93,7 +95,7 @@ async def mark_model_up(model: str, admin: dict = Depends(require_admin)):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Проверяет модель, права и квоту, прячет PII на входе и выходе, спрашивает модель (с fallback), пишет трейс"""
+    """Проверяет модель, права и квоту, прячет PII на входе и выходе, ищет в каталоге, спрашивает модель, пишет трейс"""
     # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
@@ -112,14 +114,19 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 masked, found = mask_pii(req.message)
                 guard_span.update(input=req.message, output={"masked": masked, "pii_found": list(found.keys())})
 
+            # Шаг трейса 2: поиск в каталоге дорам (RAG: даём модели настоящие данные)
+            with langfuse.start_as_current_observation(name="catalog-search", as_type="retriever", input=masked) as ret:
+                dramas = search(masked)
+                ret.update(output=[f"{d['title']} ({d['rating']:.1f})" for d in dramas])
+
             messages = [
-                # system: инструкция для модели, кем ей быть (клиент её не видит)
-                {"role": "system", "content": "Ты помощник, который советует дорамы. Отвечай по-русски, коротко."},
+                # system: инструкция + найденные дорамы (клиент её не видит)
+                {"role": "system", "content": build_system_prompt(dramas)},
                 # user: вопрос пользователя, уже БЕЗ личных данных
                 {"role": "user", "content": masked},
             ]
 
-            # Шаг трейса 2: модель с запасными (каждая попытка — отдельный шаг в Langfuse)
+            # Шаг трейса 3: модель с запасными (каждая попытка — отдельный шаг в Langfuse)
             try:
                 answered_by, data = await chat_with_fallback(req.model, ROLE_MODELS[user["role"]], messages)
             except AllModelsFailed as e:
@@ -130,7 +137,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
             usage = {"input": data.get("prompt_eval_count", 0), "output": data.get("eval_count", 0)}
 
-            # Шаг трейса 3: Guard выхода — прячем ПД, которые выдала модель, и возвращаем пользователю его данные
+            # Шаг трейса 4: Guard выхода — прячем ПД, которые выдала модель, и возвращаем пользователю его данные
             with langfuse.start_as_current_observation(name="output-guard", as_type="guardrail") as out_span:
                 safe_answer, leaked = guard_output(answer, found)
                 out_span.update(input=answer, output={"pii_leaked": leaked})
@@ -150,5 +157,6 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         masked_question=masked,
         pii_found=list(found.keys()),
         pii_leaked=leaked,
+        sources=[{k: d[k] for k in ("title", "year", "rating", "url")} for d in dramas],
         tokens_used=tokens,
     )
