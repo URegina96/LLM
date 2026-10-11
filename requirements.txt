@@ -12,3 +12,5 @@ python-dotenv    # чтение секретов из файла .env
 redis  # клиент для Redis
 
 langfuse  # SDK для отправки трейсов в Langfuse
+
+pytest  # запуск тестов

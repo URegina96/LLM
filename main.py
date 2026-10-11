@@ -5,6 +5,7 @@ from langfuse import propagate_attributes
 from pydantic import BaseModel
 
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user, require_admin
+from guard.output import guard_output
 from guard.pii import mask_pii
 from guard.quota import add_tokens, check_and_count_request, get_usage, redis_client
 from observability import langfuse
@@ -26,11 +27,12 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Что возвращает сервер: ответ нейросети и что сделал Guard."""
     answer: str
-    model: str            # какая модель ответила
-    fallback_used: bool   # ответила не та модель, которую просили
-    masked_question: str  # что на самом деле ушло в нейросеть
-    pii_found: list[str]  # какие метки поставили (только метки, без самих данных!)
-    tokens_used: int      # сколько LLM-токенов ушло на этот запрос
+    model: str             # какая модель ответила
+    fallback_used: bool    # ответила не та модель, которую просили
+    masked_question: str   # что на самом деле ушло в нейросеть
+    pii_found: list[str]   # какие метки поставили (только метки, без самих данных!)
+    pii_leaked: list[str]  # какие ПД Guard выхода нашёл и спрятал в ответе модели
+    tokens_used: int       # сколько LLM-токенов ушло на этот запрос
 
 
 async def fetch_models() -> list[str]:
@@ -91,7 +93,7 @@ async def mark_model_up(model: str, admin: dict = Depends(require_admin)):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Проверяет модель, права и квоту, прячет PII, спрашивает модель (с fallback) и пишет трейс в Langfuse"""
+    """Проверяет модель, права и квоту, прячет PII на входе и выходе, спрашивает модель (с fallback), пишет трейс"""
     # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
@@ -127,16 +129,26 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             answer = data["message"]["content"]
             # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
             usage = {"input": data.get("prompt_eval_count", 0), "output": data.get("eval_count", 0)}
-            root.update(output=answer, metadata={"requested_model": req.model, "answered_by": answered_by})
+
+            # Шаг трейса 3: Guard выхода — прячем ПД, которые выдала модель, и возвращаем пользователю его данные
+            with langfuse.start_as_current_observation(name="output-guard", as_type="guardrail") as out_span:
+                safe_answer, leaked = guard_output(answer, found)
+                out_span.update(input=answer, output={"pii_leaked": leaked})
+
+            root.update(
+                output=answer,
+                metadata={"requested_model": req.model, "answered_by": answered_by, "pii_leaked": leaked},
+            )
 
     tokens = usage["input"] + usage["output"]
     await add_tokens(user["username"], tokens)
 
     return ChatResponse(
-        answer=answer,
+        answer=safe_answer,
         model=answered_by,
         fallback_used=answered_by != req.model,
         masked_question=masked,
         pii_found=list(found.keys()),
+        pii_leaked=leaked,
         tokens_used=tokens,
     )

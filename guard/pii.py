@@ -9,18 +9,20 @@ PATTERNS = {
         r"(?:\+7|\b[78])[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}\b"  # с кодом: +7 / 7 / 8
         r"|\b9\d{2}[\s-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}\b"  # без кода: мобильный с 9
     ),
-    "IP": re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"),
+    # IP: до и после не должно быть цифр и точек с цифрой (иначе «версия 1.2.3.4.5» — тоже IP)
+    "IP": re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)"),
 }
 
 
-def mask_pii(text: str) -> tuple[str, dict[str, str]]:
+def mask_pii(text: str, prefix: str = "") -> tuple[str, dict[str, str]]:
     """Находит личные данные и заменяет их метками вида [PHONE_1].
+    prefix — приставка к меткам, например "OUT_" → [OUT_PHONE_1] (чтобы метки ответа не путались с метками вопроса).
     Возвращает замаскированный текст и «шпаргалку» метка → оригинал."""
     found: dict[str, str] = {}
     for kind, pattern in PATTERNS.items():
         # findall находит все совпадения; enumerate нумерует их с 1
         for i, value in enumerate(pattern.findall(text), start=1):
-            label = f"[{kind}_{i}]"
+            label = f"[{prefix}{kind}_{i}]"
             found[label] = value
             text = text.replace(value, label, 1)  # заменяем только это одно вхождение
     return text, found
@@ -34,6 +36,7 @@ if __name__ == "__main__":
         "Посоветуй дораму 2016 года с рейтингом 9.1",
         "Звони 999-123-45-67 или 7 912 345 67 89",
         "Слитно: maria.iv@mail.ruЗвони, ip 192.168.1.5Звони",  # edge case
+        "Версия приложения 1.2.3.4.5",  # не IP
     ]
     for t in examples:
         print(mask_pii(t))
