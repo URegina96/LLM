@@ -1,9 +1,10 @@
+import os
 import httpx
-
 from guard.quota import redis_client
 from observability import langfuse
 
-OLLAMA_BASE = "http://localhost:11434"
+# Адрес Ollama: из переменной окружения (в Docker — другой), по умолчанию — этот компьютер
+OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
 
 # Маршруты: какую модель пробовать следующей, если эта не ответила
 FALLBACKS = {

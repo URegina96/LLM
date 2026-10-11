@@ -1,0 +1,25 @@
+# CI: при каждом push и pull request GitHub сам прогоняет тесты и собирает Docker-образ
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4             # скачать код репозитория
+      - uses: actions/setup-python@v5         # поставить Python
+        with:
+          python-version: "3.13"
+          cache: pip                          # кешировать скачанные библиотеки между запусками
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -v              # упадёт тест (в т.ч. recall/FPR) — CI покраснеет
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: tests                              # собирать образ, только если тесты прошли
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t dorama-gateway .

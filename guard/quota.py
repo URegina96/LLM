@@ -1,11 +1,12 @@
+import os
 from datetime import date
 
 import redis.asyncio as redis
 from fastapi import HTTPException
 
-# Подключение к Redis (запущен в Docker на порту 6379).
+# Адрес Redis: из переменной окружения (в Docker — другой), по умолчанию — этот компьютер.
 # 127.0.0.1, а не localhost: на Windows localhost сначала идёт через IPv6 и зависает
-redis_client = redis.Redis(host="127.0.0.1", port=6379, decode_responses=True)
+redis_client = redis.Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
 
 # Сколько запросов в день можно каждой роли (None — без лимита)
 ROLE_DAILY_LIMIT = {"admin": None, "user": 100, "guest": 5}

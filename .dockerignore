@@ -1,0 +1,14 @@
+# Что НЕ копировать в образ
+.env
+.env.*
+.venv/
+venv/
+.git/
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+tests/
+monitoring/
+.github/
