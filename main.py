@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from langfuse import propagate_attributes
 from pydantic import BaseModel
@@ -15,8 +18,21 @@ from router import DOWN_KEY, OLLAMA_BASE, AllModelsFailed, chat_with_fallback
 # Модель по умолчанию, если клиент не указал свою
 DEFAULT_MODEL = "qwen2.5:7b"
 
+# Папка со страницей чата
+WEB_DIR = Path(__file__).parent / "web"
+
+# Какие поля дорамы отдаём странице для карточек (d.get: в старом каталоге постеров может не быть)
+SOURCE_FIELDS = ("title", "original_title", "year", "rating", "genres", "overview", "url",
+                 "poster", "trailer", "episodes", "cast")
+
 # это само наше приложение
 app = FastAPI(title="Дорама-GPT")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    """Страница чата. В Swagger её не показываем."""
+    return FileResponse(WEB_DIR / "index.html")
 
 
 class ChatRequest(BaseModel):
@@ -33,7 +49,7 @@ class ChatResponse(BaseModel):
     masked_question: str   # что на самом деле ушло в нейросеть
     pii_found: list[str]   # какие метки поставили (только метки, без самих данных!)
     pii_leaked: list[str]  # какие ПД Guard выхода нашёл и спрятал в ответе модели
-    sources: list[dict]    # дорамы из каталога, которые получила модель (название, год, рейтинг, ссылка)
+    sources: list[dict]    # дорамы из каталога, которые получила модель (для карточек на странице)
     tokens_used: int       # сколько LLM-токенов ушло на этот запрос
 
 
@@ -157,6 +173,6 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         masked_question=masked,
         pii_found=list(found.keys()),
         pii_leaked=leaked,
-        sources=[{k: d[k] for k in ("title", "year", "rating", "url")} for d in dramas],
+        sources=[{k: d.get(k) for k in SOURCE_FIELDS} for d in dramas],
         tokens_used=tokens,
     )

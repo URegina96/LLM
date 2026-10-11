@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Дорама-GPT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Epilogue:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Палитра «Organic»: земляные тона, без белого и чёрного */
+  :root {
+    --sand: #E8DCC7;        /* фон страницы */
+    --oat: #D4B895;         /* рамки, чипы */
+    --panel: #DED0B6;       /* пузырь ассистента, карточки */
+    --sage: #8B9D83;
+    --moss: #606C38;        /* главные кнопки, пузырь пользователя */
+    --clay: #B08B6E;
+    --terracotta: #C66B3D;  /* акцент: рейтинг, отправка */
+    --ochre: #C08E3A;
+    --ink: #2E3121;         /* текст: тёмный мох вместо чёрного */
+    --ink-soft: #5A5A44;
+    --radius: 24px;
+    --ease: cubic-bezier(.33, .1, .25, 1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--sand);
+    color: var(--ink);
+    font: 18px/1.55 "Epilogue", "Segoe UI", sans-serif;  /* крупный шрифт — читать удобно */
+  }
+  /* Лёгкое «зерно» поверх фона */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    opacity: .025;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  h1, .seal-num { font-family: "Fraunces", Georgia, serif; }
+  button, input, textarea { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  .icon { width: 20px; height: 20px; flex: none; }
+
+  /* ---------- Вход ---------- */
+  .login {
+    min-height: 100%;
+    display: grid; place-items: center;
+    padding: 24px 16px;
+  }
+  .login-card {
+    width: 100%; max-width: 400px;
+    background: var(--panel);
+    border-radius: 32px;
+    padding: 40px 32px 32px;
+    animation: rise .5s var(--ease);
+  }
+  .login h1 { margin: 0 0 4px; font-size: 40px; font-weight: 600; letter-spacing: -.01em; }
+  .login p { margin: 0 0 28px; color: var(--ink-soft); }
+  .field { display: block; margin-bottom: 18px; }
+  .field span { display: block; font-size: 15px; font-weight: 500; margin-bottom: 6px; }
+  .field input {
+    width: 100%;
+    padding: 14px 18px;
+    border: 2px solid var(--oat);
+    border-radius: 16px;
+    background: var(--sand);
+    outline: none;
+    transition: border-color .3s var(--ease);
+  }
+  .field input:focus { border-color: var(--moss); }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: 0; border-radius: 18px;
+    padding: 14px 22px;
+    background: var(--moss); color: var(--sand);
+    font-weight: 600; cursor: pointer;
+    transition: transform .3s var(--ease), background .3s var(--ease);
+  }
+  .btn:hover { background: #535E30; }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn-wide { width: 100%; margin-top: 6px; }
+  .error { color: var(--terracotta); font-size: 15px; min-height: 22px; margin: 10px 0 0; }
+
+  /* ---------- Чат ---------- */
+  .app { height: 100%; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; gap: 16px;
+    max-width: 800px; width: 100%; margin: 0 auto;
+    padding: 18px 16px 12px;
+  }
+  .topbar h1 { margin: 0; font-size: 30px; font-weight: 600; flex: 1; }
+  .usage { font-size: 15px; color: var(--ink-soft); white-space: nowrap; }
+  .btn-ghost {
+    background: transparent; color: var(--ink);
+    border: 2px solid var(--oat); padding: 8px 14px; font-size: 15px;
+  }
+  .btn-ghost:hover { background: var(--panel); }
+
+  .messages {
+    flex: 1; overflow-y: auto;
+    max-width: 800px; width: 100%; margin: 0 auto;
+    padding: 8px 16px 24px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .empty {
+    margin: auto 0; text-align: center; color: var(--ink-soft);
+    padding: 24px 8px;
+  }
+  .empty h2 { font-family: "Fraunces", Georgia, serif; font-weight: 400; font-size: 28px; color: var(--ink); margin: 0 0 8px; }
+
+  .msg { max-width: 88%; animation: rise .4s var(--ease); }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--moss); color: var(--sand);
+    padding: 12px 18px;
+    border-radius: var(--radius) var(--radius) 8px var(--radius);
+    white-space: pre-wrap;
+  }
+  .msg-bot { align-self: flex-start; }
+  .bubble {
+    background: var(--panel);
+    padding: 14px 20px;
+    border-radius: var(--radius) var(--radius) var(--radius) 8px;
+  }
+  .bubble strong { font-weight: 600; }
+  .note {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 8px; font-size: 14px; color: var(--ink-soft);
+  }
+  .note .icon { width: 16px; height: 16px; color: var(--sage); }
+  .msg-error .bubble { background: transparent; border: 2px solid var(--terracotta); }
+
+  /* Печатает… */
+  .typing { display: flex; gap: 6px; padding: 18px 22px; }
+  .typing i {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--sage);
+    animation: breathe 1.4s var(--ease) infinite;
+  }
+  .typing i:nth-child(2) { animation-delay: .2s; }
+  .typing i:nth-child(3) { animation-delay: .4s; }
+
+  /* Карточки дорам: нажатие раскрывает постер, описание, трейлер и актёров */
+  .cards { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+  .drama {
+    border: 2px solid var(--oat);
+    border-radius: 24px;
+    overflow: hidden;
+    transition: background .3s var(--ease);
+  }
+  .drama[open] { background: var(--panel); }
+  .drama summary {
+    list-style: none;
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px 12px 12px;
+    cursor: pointer;
+  }
+  .drama summary::-webkit-details-marker { display: none; }
+  .drama summary:hover { background: var(--panel); }
+  .thumb {
+    width: 52px; height: 78px; flex: none;
+    border-radius: 12px; object-fit: cover;
+    background: var(--oat);
+  }
+  .card-text { flex: 1; min-width: 0; }
+  .chevron { width: 22px; height: 22px; color: var(--ink-soft); transition: transform .4s var(--ease); flex: none; }
+  .drama[open] .chevron { transform: rotate(180deg); }
+
+  .drama-body {
+    display: grid; grid-template-columns: 150px 1fr; gap: 20px;
+    padding: 4px 20px 20px;
+    animation: rise .4s var(--ease);
+  }
+  .drama-body > div { min-width: 0; }  /* иначе лента актёров распирает колонку и текст обрезается */
+  .poster { width: 100%; border-radius: 16px; display: block; }
+  .drama-body h3 { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 24px; line-height: 1.2; margin: 0 0 4px; }
+  .facts { font-size: 15px; color: var(--ink-soft); margin: 0 0 12px; }
+  .overview { margin: 0 0 16px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+  .btn-trailer { background: var(--terracotta); padding: 10px 18px; font-size: 16px; text-decoration: none; }
+  .btn-trailer:hover { background: #B35C31; }
+  .btn-link { background: transparent; color: var(--ink); border: 2px solid var(--oat); padding: 8px 16px; font-size: 16px; text-decoration: none; }
+  .btn-link:hover { background: var(--sand); }
+
+  .cast-title { font-weight: 600; font-size: 15px; margin: 0 0 10px; }
+  .cast { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
+  .actor { width: 84px; flex: none; text-align: center; font-size: 13px; line-height: 1.3; }
+  .actor img, .actor .no-photo {
+    width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
+    display: block; margin: 0 auto 6px;
+    background: var(--oat);
+  }
+  .actor .no-photo { display: grid; place-items: center; font-family: "Fraunces", Georgia, serif; font-size: 24px; color: var(--sand); background: var(--clay); }
+  .actor b { display: block; font-weight: 600; }
+  .actor span { color: var(--ink-soft); }
+  .seal {
+    --p: 0;
+    flex: none;
+    width: 58px; height: 58px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: conic-gradient(var(--terracotta) calc(var(--p) * 1%), var(--oat) 0);
+  }
+  .seal-num {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--sand);
+    font-size: 19px; font-weight: 600; color: var(--terracotta);
+  }
+  .msg:last-child .drama:not([open]) .seal { animation: breathe 3s var(--ease) infinite; }
+  .card-title { font-weight: 600; line-height: 1.3; }
+  .card-meta { font-size: 14px; color: var(--ink-soft); }
+
+  /* Подсказки и поле ввода */
+  .composer-wrap { max-width: 800px; width: 100%; margin: 0 auto; padding: 0 16px 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    border: 2px solid var(--oat); background: transparent;
+    border-radius: 999px; padding: 8px 16px; font-size: 15px; cursor: pointer;
+    transition: background .3s var(--ease);
+  }
+  .chip:hover { background: var(--panel); }
+  .composer {
+    display: flex; align-items: flex-end; gap: 10px;
+    background: var(--panel);
+    border-radius: 28px;
+    padding: 8px 8px 8px 20px;
+  }
+  .composer textarea {
+    flex: 1; border: 0; background: transparent; outline: none; resize: none;
+    padding: 10px 0; max-height: 160px;
+  }
+  .send {
+    width: 48px; height: 48px; padding: 0; border-radius: 50%;
+    background: var(--terracotta);
+  }
+  .send:hover { background: #B35C31; }
+  .credit { font-size: 12px; color: var(--ink-soft); text-align: center; margin: 10px 0 0; }
+  .credit a { color: inherit; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.06); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+
+  @media (max-width: 560px) {
+    body { font-size: 17px; }
+    .topbar h1 { font-size: 24px; }
+    .login h1 { font-size: 32px; }
+    .login-card { padding: 32px 22px 24px; }
+    .usage { display: none; }
+    .msg { max-width: 100%; }
+    .drama-body { grid-template-columns: 1fr; }
+    .poster { max-width: 180px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Экран входа -->
+<main class="login" id="loginView" hidden>
+  <form class="login-card" id="loginForm">
+    <h1>Дорама-GPT</h1>
+    <p>Советует корейские дорамы с рейтингом из каталога TMDB.</p>
+    <label class="field"><span>Логин</span><input name="username" autocomplete="username" required></label>
+    <label class="field"><span>Пароль</span><input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="btn btn-wide" type="submit">Войти</button>
+    <p class="error" id="loginError" role="alert"></p>
+  </form>
+</main>
+
+<!-- Чат -->
+<div class="app" id="chatView" hidden>
+  <header class="topbar">
+    <h1>Дорама-GPT</h1>
+    <span class="usage" id="usage"></span>
+    <button class="btn btn-ghost" id="logout" type="button">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+      Выйти
+    </button>
+  </header>
+
+  <section class="messages" id="messages" aria-live="polite">
+    <div class="empty" id="empty">
+      <h2>Что хочется посмотреть?</h2>
+      <div>Напишите жанр, настроение или минимальный рейтинг.</div>
+    </div>
+  </section>
+
+  <div class="composer-wrap">
+    <div class="chips" id="chips">
+      <button class="chip" type="button">Дорама про любовь с рейтингом выше 8.5</button>
+      <button class="chip" type="button">Хочу детектив</button>
+      <button class="chip" type="button">Что-нибудь смешное</button>
+      <button class="chip" type="button">Дорама про семью</button>
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="input" rows="1" placeholder="Например: посоветуй дораму про любовь" aria-label="Сообщение"></textarea>
+      <button class="btn send" id="sendBtn" type="submit" aria-label="Отправить">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+      </button>
+    </form>
+    <p class="credit">Данные о дорамах: <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>. Этот продукт использует API TMDB, но не одобрен и не сертифицирован TMDB.</p>
+  </div>
+</div>
+
+<script>
+  // ---------- Токен: храним в браузере, чтобы не входить заново при каждом открытии ----------
+  const TOKEN_KEY = "dorama_token";
+  const store = {
+    get() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
+    set(v) { try { localStorage.setItem(TOKEN_KEY, v); } catch {} },
+    clear() { try { localStorage.removeItem(TOKEN_KEY); } catch {} },
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const PII_NAMES = { PHONE: "телефон", EMAIL: "почта", CARD: "номер карты", IP: "IP-адрес" };
+  const LOCK_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+
+  // Запрос к нашему API с токеном. 401 — токен истёк, возвращаемся на вход.
+  async function api(path, options = {}) {
+    const headers = { ...(options.headers || {}), Authorization: "Bearer " + store.get() };
+    const res = await fetch(path, { ...options, headers });
+    if (res.status === 401) { logout(); throw new Error("unauthorized"); }
+    return res;
+  }
+
+  // Экранируем HTML (защита от XSS), потом разрешаем только **жирный** и переносы строк
+  function format(text) {
+    const safe = text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    return safe.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+  }
+  const escapeText = (s) => format(String(s)).replace(/<br>/g, " ");
+
+  function showLogin() { $("chatView").hidden = true; $("loginView").hidden = false; $("loginForm").username.focus(); }
+  function showChat() { $("loginView").hidden = true; $("chatView").hidden = false; $("input").focus(); loadUsage(); }
+  function logout() { store.clear(); showLogin(); }
+
+  // ---------- Вход ----------
+  $("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    $("loginError").textContent = "";
+    const res = await fetch("/token", {
+      method: "POST",
+      body: new URLSearchParams({ username: form.username.value.trim(), password: form.password.value }),
+    });
+    if (!res.ok) { $("loginError").textContent = "Неверный логин или пароль"; return; }
+    store.set((await res.json()).access_token);
+    form.password.value = "";
+    showChat();
+  });
+  $("logout").addEventListener("click", logout);
+
+  // ---------- Счётчик запросов на сегодня ----------
+  async function loadUsage() {
+    try {
+      const u = await (await api("/usage")).json();
+      $("usage").textContent = u.requests_limit
+        ? `Сегодня: ${u.requests_used} из ${u.requests_limit}`
+        : `Сегодня: ${u.requests_used}`;
+    } catch {}
+  }
+
+  // ---------- Сообщения ----------
+  function addMessage(html, cls) {
+    $("empty")?.remove();
+    const el = document.createElement("div");
+    el.className = "msg " + cls;
+    el.innerHTML = html;
+    $("messages").append(el);
+    el.scrollIntoView({ behavior: "smooth", block: "end" });
+    return el;
+  }
+
+  // Ссылки берём только с ожидаемых сайтов — всё остальное отбрасываем
+  const SAFE_URL = /^https:\/\/(image\.tmdb\.org|www\.themoviedb\.org|www\.youtube\.com)\//;
+  const safeUrl = (u) => (typeof u === "string" && SAFE_URL.test(u) ? u : null);
+  const CHEVRON = '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  const PLAY_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"/></svg>';
+
+  function renderActor(a) {
+    const photo = safeUrl(a.photo);
+    const face = photo
+      ? `<img src="${photo}" alt="" loading="lazy">`
+      : `<span class="no-photo">${escapeText(a.name.charAt(0))}</span>`;
+    return `<div class="actor">${face}<b>${escapeText(a.name)}</b>${a.character ? `<span>${escapeText(a.character)}</span>` : ""}</div>`;
+  }
+
+  // Одна дорама: свёрнутая строка + раскрывающиеся подробности (<details> работает без JS)
+  function renderDrama(d) {
+    const poster = safeUrl(d.poster);
+    const trailer = safeUrl(d.trailer);
+    const page = safeUrl(d.url);
+    const facts = [d.year, d.episodes ? `${d.episodes} серий` : "", (d.genres || []).join(", ")].filter(Boolean).join(" · ");
+    const cast = d.cast || [];
+    return `
+      <details class="drama">
+        <summary>
+          ${poster ? `<img class="thumb" src="${poster}" alt="" loading="lazy">` : ""}
+          <span class="card-text"><span class="card-title">${escapeText(d.title)}</span><br><span class="card-meta">${escapeText(d.year || "")}</span></span>
+          <span class="seal" style="--p:${Math.round(d.rating * 10)}"><span class="seal-num">${d.rating.toFixed(1)}</span></span>
+          ${CHEVRON}
+        </summary>
+        <div class="drama-body">
+          ${poster ? `<img class="poster" src="${poster}" alt="Постер: ${escapeText(d.title)}" loading="lazy">` : "<span></span>"}
+          <div>
+            <h3>${escapeText(d.title)}</h3>
+            <p class="facts">${escapeText(facts)}</p>
+            ${d.overview ? `<p class="overview">${escapeText(d.overview)}</p>` : ""}
+            <div class="actions">
+              ${trailer ? `<a class="btn btn-trailer" href="${trailer}" target="_blank" rel="noopener">${PLAY_ICON}Трейлер</a>` : ""}
+              ${page ? `<a class="btn btn-link" href="${page}" target="_blank" rel="noopener">Страница на TMDB</a>` : ""}
+            </div>
+            ${cast.length ? `<p class="cast-title">В ролях</p><div class="cast">${cast.map(renderActor).join("")}</div>` : ""}
+          </div>
+        </div>
+      </details>`;
+  }
+
+  // Карточки только тех дорам, которые модель реально назвала в ответе
+  function renderCards(answer, sources) {
+    const text = answer.toLowerCase();
+    const named = sources.filter((d) => text.includes(d.title.toLowerCase()));
+    if (!named.length) return "";
+    return '<div class="cards">' + named.map(renderDrama).join("") + "</div>";
+  }
+
+  async function send(text) {
+    text = text.trim();
+    if (!text) return;
+    $("chips").hidden = true;
+    $("input").value = "";
+    autosize();
+    $("sendBtn").disabled = true;
+    addMessage(format(text), "msg-user");
+    const typing = addMessage('<div class="bubble typing"><i></i><i></i><i></i></div>', "msg-bot");
+
+    try {
+      const res = await api("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await res.json();
+      typing.remove();
+      if (!res.ok) {
+        const msg = res.status === 429 || res.status === 503 ? data.detail : "Не получилось получить ответ. Попробуйте ещё раз.";
+        addMessage(`<div class="bubble">${format(msg)}</div>`, "msg-bot msg-error");
+        return;
+      }
+      const hidden = [...new Set(data.pii_found.map((l) => PII_NAMES[l.slice(1, -1).replace(/_\d+$/, "")]).filter(Boolean))];
+      const note = hidden.length ? `<div class="note">${LOCK_ICON}Скрыто от нейросети: ${hidden.join(", ")}</div>` : "";
+      addMessage(`<div class="bubble">${format(data.answer)}</div>${renderCards(data.answer, data.sources)}${note}`, "msg-bot");
+    } catch (err) {
+      typing.remove();
+      if (err.message !== "unauthorized") {
+        addMessage('<div class="bubble">Сервер не отвечает. Проверьте, что он запущен.</div>', "msg-bot msg-error");
+      }
+    } finally {
+      $("sendBtn").disabled = false;
+      $("input").focus();
+      loadUsage();
+    }
+  }
+
+  // Поле ввода растёт вместе с текстом; Enter — отправить, Shift+Enter — новая строка
+  function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; }
+  $("input").addEventListener("input", autosize);
+  $("input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("input").value); }
+  });
+  $("composer").addEventListener("submit", (e) => { e.preventDefault(); send($("input").value); });
+  document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => send(c.textContent)));
+
+  // При открытии: есть токен — сразу в чат, нет — на вход
+  store.get() ? showChat() : showLogin();
+</script>
+</body>
+</html>
