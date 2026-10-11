@@ -1,15 +1,16 @@
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from guard.quota import add_tokens, check_and_count_request, get_usage
-from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user
-from guard.pii import mask_pii
 from langfuse import propagate_attributes
-from observability import langfuse
+from pydantic import BaseModel
 
-# Адрес Ollama и модель по умолчанию
-OLLAMA_BASE = "http://localhost:11434"
+from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user, require_admin
+from guard.pii import mask_pii
+from guard.quota import add_tokens, check_and_count_request, get_usage, redis_client
+from observability import langfuse
+from router import DOWN_KEY, OLLAMA_BASE, AllModelsFailed, chat_with_fallback
+
+# Модель по умолчанию, если клиент не указал свою
 DEFAULT_MODEL = "qwen2.5:7b"
 
 # это само наше приложение
@@ -26,6 +27,7 @@ class ChatResponse(BaseModel):
     """Что возвращает сервер: ответ нейросети и что сделал Guard."""
     answer: str
     model: str            # какая модель ответила
+    fallback_used: bool   # ответила не та модель, которую просили
     masked_question: str  # что на самом деле ушло в нейросеть
     pii_found: list[str]  # какие метки поставили (только метки, без самих данных!)
     tokens_used: int      # сколько LLM-токенов ушло на этот запрос
@@ -59,10 +61,12 @@ def me(user: dict = Depends(get_current_user)):
     """Кто я: данные из токена"""
     return user
 
+
 @app.get("/usage")
 async def usage(user: dict = Depends(get_current_user)):
     """Сколько запросов и LLM-токенов я потратила сегодня"""
     return await get_usage(user["username"], user["role"])
+
 
 @app.get("/models")
 async def list_models(user: dict = Depends(get_current_user)) -> list[str]:
@@ -70,9 +74,24 @@ async def list_models(user: dict = Depends(get_current_user)) -> list[str]:
     allowed = ROLE_MODELS[user["role"]]
     return [m for m in await fetch_models() if m in allowed]
 
+
+@app.post("/admin/models/{model}/down")
+async def mark_model_down(model: str, admin: dict = Depends(require_admin)):
+    """Админ: пометить модель «упавшей» (имитация сбоя для проверки fallback)"""
+    await redis_client.sadd(DOWN_KEY, model)
+    return {"down": sorted(await redis_client.smembers(DOWN_KEY))}
+
+
+@app.delete("/admin/models/{model}/down")
+async def mark_model_up(model: str, admin: dict = Depends(require_admin)):
+    """Админ: вернуть модель в строй"""
+    await redis_client.srem(DOWN_KEY, model)
+    return {"down": sorted(await redis_client.smembers(DOWN_KEY))}
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Проверяет модель, права и квоту, прячет PII, спрашивает Ollama и пишет трейс в Langfuse"""
+    """Проверяет модель, права и квоту, прячет PII, спрашивает модель (с fallback) и пишет трейс в Langfuse"""
     # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
@@ -98,30 +117,25 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 {"role": "user", "content": masked},
             ]
 
-            # Шаг трейса 2: вызов модели (generation — особый тип для LLM: модель, токены, стоимость)
-            with langfuse.start_as_current_observation(
-                name="ollama", as_type="generation", model=req.model, input=messages
-            ) as gen:
-                async with httpx.AsyncClient(timeout=120) as client:
-                    r = await client.post(
-                        f"{OLLAMA_BASE}/api/chat",
-                        json={"model": req.model, "messages": messages, "stream": False},
-                    )
-                    r.raise_for_status()  # если Ollama ответила ошибкой, сразу сообщить
-                data = r.json()
-                answer = data["message"]["content"]
-                # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
-                usage = {"input": data.get("prompt_eval_count", 0), "output": data.get("eval_count", 0)}
-                gen.update(output=answer, usage_details=usage)
+            # Шаг трейса 2: модель с запасными (каждая попытка — отдельный шаг в Langfuse)
+            try:
+                answered_by, data = await chat_with_fallback(req.model, ROLE_MODELS[user["role"]], messages)
+            except AllModelsFailed as e:
+                root.update(level="ERROR", status_message=str(e))
+                raise HTTPException(status_code=503, detail="Все модели сейчас недоступны, попробуйте позже")
 
-            root.update(output=answer)
+            answer = data["message"]["content"]
+            # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
+            usage = {"input": data.get("prompt_eval_count", 0), "output": data.get("eval_count", 0)}
+            root.update(output=answer, metadata={"requested_model": req.model, "answered_by": answered_by})
 
     tokens = usage["input"] + usage["output"]
     await add_tokens(user["username"], tokens)
 
     return ChatResponse(
         answer=answer,
-        model=req.model,
+        model=answered_by,
+        fallback_used=answered_by != req.model,
         masked_question=masked,
         pii_found=list(found.keys()),
         tokens_used=tokens,

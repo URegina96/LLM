@@ -65,6 +65,13 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     return {"username": payload["sub"], "role": payload["role"]}
 
 
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Пускает только админа, остальным — 403."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Только для администратора")
+    return user
+
+
 if __name__ == "__main__":
     # Генератор хешей: python guard/auth.py → ввести пароль → скопировать хеш в USERS
     print(hash_password(input("Пароль: ")))
