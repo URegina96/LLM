@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from guard.quota import add_tokens, check_and_count_request, get_usage
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user
 from guard.pii import mask_pii
+from langfuse import propagate_attributes
+from observability import langfuse
 
 # Адрес Ollama и модель по умолчанию
 OLLAMA_BASE = "http://localhost:11434"
@@ -70,7 +72,7 @@ async def list_models(user: dict = Depends(get_current_user)) -> list[str]:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Проверяет модель и права, прячет личные данные, передаёт вопрос в Ollama"""
+    """Проверяет модель, права и квоту, прячет PII, спрашивает Ollama и пишет трейс в Langfuse"""
     # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
@@ -80,31 +82,45 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     # Квота: +1 запрос; если лимит исчерпан — 429
     await check_and_count_request(user["username"], user["role"])
 
-    masked, found = mask_pii(req.message)  # Guard входа: прячем личные данные
+    # Всё внутри — один трейс, привязанный к пользователю и его роли
+    with propagate_attributes(user_id=user["username"], tags=[f"role:{user['role']}"]):
+        with langfuse.start_as_current_observation(name="chat", input=req.message) as root:
 
-    payload = {
-        "model": req.model,
-        "messages": [
-            # system: инструкция для модели, кем ей быть (клиент её не видит)
-            {"role": "system", "content": "Ты помощник, который советует дорамы. Отвечай по-русски, коротко."},
-            # user: вопрос пользователя, уже БЕЗ личных данных
-            {"role": "user", "content": masked},
-        ],
-        "stream": False,  # получить ответ целиком, а не по кусочкам
-    }
-    # timeout=120: даём модели до 2 минут (первый запуск бывает медленным)
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(f"{OLLAMA_BASE}/api/chat", json=payload)
-        r.raise_for_status()  # если Ollama ответила ошибкой, сразу сообщить
+            # Шаг трейса 1: Guard входа
+            with langfuse.start_as_current_observation(name="pii-guard", as_type="guardrail") as guard_span:
+                masked, found = mask_pii(req.message)
+                guard_span.update(input=req.message, output={"masked": masked, "pii_found": list(found.keys())})
 
-    data = r.json()
-    # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
-    tokens = data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
-    await add_tokens(user["username"], tokens)
+            messages = [
+                # system: инструкция для модели, кем ей быть (клиент её не видит)
+                {"role": "system", "content": "Ты помощник, который советует дорамы. Отвечай по-русски, коротко."},
+                # user: вопрос пользователя, уже БЕЗ личных данных
+                {"role": "user", "content": masked},
+            ]
+
+            # Шаг трейса 2: вызов модели (generation — особый тип для LLM: модель, токены, стоимость)
+            with langfuse.start_as_current_observation(
+                name="ollama", as_type="generation", model=req.model, input=messages
+            ) as gen:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    r = await client.post(
+                        f"{OLLAMA_BASE}/api/chat",
+                        json={"model": req.model, "messages": messages, "stream": False},
+                    )
+                    r.raise_for_status()  # если Ollama ответила ошибкой, сразу сообщить
+                data = r.json()
+                answer = data["message"]["content"]
+                # Ollama сообщает, сколько токенов ушло на вопрос и на ответ
+                usage = {"input": data.get("prompt_eval_count", 0), "output": data.get("eval_count", 0)}
+                gen.update(output=answer, usage_details=usage)
+
+            root.update(output=answer)
+
+    tokens = usage["input"] + usage["output"]
     await add_tokens(user["username"], tokens)
 
     return ChatResponse(
-        answer=data["message"]["content"],
+        answer=answer,
         model=req.model,
         masked_question=masked,
         pii_found=list(found.keys()),
