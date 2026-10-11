@@ -3,16 +3,14 @@ uvicorn[standard] # прога , запускает севрер и держит
 
 #подключение к севреру оламы
 httpx # библиотека, с помощью которой наш сервер сам отправляет запросы другим серверам
-
 pyjwt            # создание и проверка JWT-токенов
 bcrypt           # хеширование паролей
 python-multipart # чтобы FastAPI принимал форму логина
 python-dotenv    # чтение секретов из файла .env
-
 redis  # клиент для Redis
-
 langfuse  # SDK для отправки трейсов в Langfuse
-
 pytest  # запуск тестов
-
 prometheus-client  # метрики для Prometheus
+sqlalchemy[asyncio]  # ORM: работа с базой через классы Python
+asyncpg              # драйвер PostgreSQL (асинхронный)
+aiosqlite            # SQLite для тестов (чтобы тестам не нужен был Postgres)

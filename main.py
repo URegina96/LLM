@@ -1,3 +1,5 @@
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -7,6 +9,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from langfuse import propagate_attributes
 from pydantic import BaseModel
 
+from audit.store import init_db, recent, stats, write_audit
 from dramas.catalog import build_system_prompt, search
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user, require_admin
 from guard.output import guard_output
@@ -26,8 +29,16 @@ WEB_DIR = Path(__file__).parent / "web"
 SOURCE_FIELDS = ("title", "original_title", "year", "rating", "genres", "overview", "url",
                  "poster", "trailer", "episodes", "cast")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Что сделать при старте сервера (до первого запроса) и при остановке."""
+    await init_db()  # создать таблицы в PostgreSQL, если их ещё нет
+    yield            # здесь сервер работает
+
+
 # это само наше приложение
-app = FastAPI(title="Дорама-GPT")
+app = FastAPI(title="Дорама-GPT", lifespan=lifespan)
 # Замер каждого запроса (время, код ответа) для Prometheus
 app.middleware("http")(metrics_middleware)
 
@@ -118,9 +129,22 @@ async def mark_model_up(model: str, admin: dict = Depends(require_admin)):
     return {"down": sorted(await redis_client.smembers(DOWN_KEY))}
 
 
+@app.get("/admin/audit")
+async def audit_log(limit: int = 50, admin: dict = Depends(require_admin)):
+    """Админ: последние записи журнала аудита"""
+    return await recent(limit)
+
+
+@app.get("/admin/audit/stats")
+async def audit_stats(days: int = 7, admin: dict = Depends(require_admin)):
+    """Админ: сводка по пользователям за N дней (SQL GROUP BY)"""
+    return await stats(days)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """Проверяет модель, права и квоту, прячет PII на входе и выходе, ищет в каталоге, спрашивает модель, пишет трейс"""
+    start = time.perf_counter()  # для журнала: сколько занял запрос
     # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
@@ -133,6 +157,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     # Всё внутри — один трейс, привязанный к пользователю и его роли
     with propagate_attributes(user_id=user["username"], tags=[f"role:{user['role']}"]):
         with langfuse.start_as_current_observation(name="chat", input=req.message) as root:
+            trace_id = langfuse.get_current_trace_id()  # чтобы из журнала найти трейс в Langfuse
 
             # Шаг трейса 1: Guard входа
             with langfuse.start_as_current_observation(name="pii-guard", as_type="guardrail") as guard_span:
@@ -156,6 +181,12 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 answered_by, data = await chat_with_fallback(req.model, ROLE_MODELS[user["role"]], messages)
             except AllModelsFailed as e:
                 root.update(level="ERROR", status_message=str(e))
+                await write_audit(
+                    username=user["username"], role=user["role"], status=503,
+                    requested_model=req.model, answered_model=None,
+                    masked_question=masked, pii_found=list(found.keys()), pii_leaked=[],
+                    latency_ms=round((time.perf_counter() - start) * 1000), trace_id=trace_id,
+                )
                 raise HTTPException(status_code=503, detail="Все модели сейчас недоступны, попробуйте позже")
 
             answer = data["message"]["content"]
@@ -182,6 +213,15 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     record_pii("output", leaked)
     if answered_by != req.model:
         FALLBACKS.labels(requested=req.model, answered=answered_by).inc()
+
+    # Журнал аудита в PostgreSQL: кто, когда, какая модель, что нашёл Guard (без самих ПД)
+    await write_audit(
+        username=user["username"], role=user["role"], status=200,
+        requested_model=req.model, answered_model=answered_by,
+        masked_question=masked, pii_found=list(found.keys()), pii_leaked=leaked,
+        tokens_in=usage["input"], tokens_out=usage["output"],
+        latency_ms=round((time.perf_counter() - start) * 1000), trace_id=trace_id,
+    )
 
     return ChatResponse(
         answer=safe_answer,

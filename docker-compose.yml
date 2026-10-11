@@ -1,0 +1,22 @@
+# Инфраструктура приложения: база для журнала аудита
+name: dorama-app
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: dorama
+      POSTGRES_USER: dorama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задай POSTGRES_PASSWORD в .env}
+    ports:
+      - "127.0.0.1:5433:5432"            # 5432 занят Postgres-ом Langfuse
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # данные переживают перезапуск контейнера
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dorama -d dorama"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
