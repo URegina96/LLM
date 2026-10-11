@@ -299,7 +299,7 @@
       <button class="chip" type="button">Дорама про семью</button>
     </div>
     <form class="composer" id="composer">
-      <textarea id="input" rows="1" placeholder="Например: посоветуй дораму про любовь" aria-label="Сообщение"></textarea>
+      <textarea id="input" rows="1" placeholder="Спросите про дораму" aria-label="Сообщение"></textarea>
       <button class="btn send" id="sendBtn" type="submit" aria-label="Отправить">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
       </button>
@@ -349,7 +349,12 @@
       method: "POST",
       body: new URLSearchParams({ username: form.username.value.trim(), password: form.password.value }),
     });
-    if (!res.ok) { $("loginError").textContent = "Неверный логин или пароль"; return; }
+    if (!res.ok) {
+      // 429 — слишком много попыток: показываем текст сервера, иначе — стандартное сообщение
+      const err = await res.json().catch(() => ({}));
+      $("loginError").textContent = res.status === 429 && err.detail ? err.detail : "Неверный логин или пароль";
+      return;
+    }
     store.set((await res.json()).access_token);
     form.password.value = "";
     showChat();
@@ -446,10 +451,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
       });
-      const data = await res.json();
+      // Ответ с ошибкой может быть не JSON (например, «Internal Server Error») — тогда пустой объект
+      const data = await res.json().catch(() => ({}));
       typing.remove();
       if (!res.ok) {
-        const msg = res.status === 429 || res.status === 503 ? data.detail : "Не получилось получить ответ. Попробуйте ещё раз.";
+        const msg = (res.status === 429 || res.status === 503) && data.detail
+          ? data.detail
+          : `Не получилось получить ответ (ошибка ${res.status}). Попробуйте ещё раз.`;
         addMessage(`<div class="bubble">${format(msg)}</div>`, "msg-bot msg-error");
         return;
       }

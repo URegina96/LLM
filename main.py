@@ -8,13 +8,23 @@ from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from langfuse import propagate_attributes
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from audit.store import init_db, recent, stats, write_audit
 from dramas.catalog import build_system_prompt, search
 from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user, require_admin
 from guard.output import guard_output
 from guard.pii import mask_pii
-from guard.quota import add_tokens, check_and_count_request, get_usage, redis_client
+from guard.quota import (
+    add_tokens,
+    check_and_count_request,
+    check_login_allowed,
+    get_usage,
+    redis_client,
+    refund_request,
+    register_login_failure,
+    reset_login_failures,
+)
 from monitoring import FALLBACKS, LLM_TOKENS, metrics_endpoint, metrics_middleware, record_pii
 from observability import langfuse
 from router import DOWN_KEY, OLLAMA_BASE, AllModelsFailed, chat_with_fallback
@@ -24,6 +34,10 @@ DEFAULT_MODEL = "qwen2.5:7b"
 
 # Папка со страницей чата
 WEB_DIR = Path(__file__).parent / "web"
+
+# Список моделей Ollama кешируем: он меняется редко, а спрашивать его на каждый вопрос — лишний запрос
+MODELS_CACHE_SECONDS = 30
+_models_cache: tuple[float, list[str]] = (0.0, [])
 
 # Какие поля дорамы отдаём странице для карточек (d.get: в старом каталоге постеров может не быть)
 SOURCE_FIELDS = ("title", "original_title", "year", "rating", "genres", "overview", "url",
@@ -68,11 +82,20 @@ class ChatResponse(BaseModel):
 
 
 async def fetch_models() -> list[str]:
-    """Спрашивает у Ollama, какие модели скачаны, и возвращает их имена."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(f"{OLLAMA_BASE}/api/tags")
-        r.raise_for_status()
-    return [m["name"] for m in r.json()["models"]]
+    """Имена моделей, скачанных в Ollama (кеш на 30 секунд). Ollama недоступна — 503."""
+    global _models_cache
+    fetched_at, models = _models_cache
+    if time.monotonic() - fetched_at < MODELS_CACHE_SECONDS:
+        return models
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{OLLAMA_BASE}/api/tags")
+            r.raise_for_status()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Модели сейчас недоступны, попробуйте позже")
+    models = [m["name"] for m in r.json()["models"]]
+    _models_cache = (time.monotonic(), models)
+    return models
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -88,11 +111,15 @@ def health():
 
 
 @app.post("/token")
-def login(form: OAuth2PasswordRequestForm = Depends()):
-    """Логин: проверяет логин и пароль и выдаёт JWT-токен."""
-    user = authenticate(form.username, form.password)
+async def login(form: OAuth2PasswordRequestForm = Depends()):
+    """Логин: проверяет логин и пароль и выдаёт JWT-токен. 5 ошибок подряд — блок на 15 минут."""
+    await check_login_allowed(form.username)
+    # bcrypt специально медленный — считаем его в отдельном потоке, чтобы не тормозить остальные запросы
+    user = await run_in_threadpool(authenticate, form.username, form.password)
     if not user:
+        await register_login_failure(form.username)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    await reset_login_failures(form.username)
     return {"access_token": create_token(user["username"], user["role"]), "token_type": "bearer"}
 
 
@@ -187,6 +214,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                     masked_question=masked, pii_found=list(found.keys()), pii_leaked=[],
                     latency_ms=round((time.perf_counter() - start) * 1000), trace_id=trace_id,
                 )
+                await refund_request(user["username"])  # ответа не было — запрос в квоту не засчитываем
                 raise HTTPException(status_code=503, detail="Все модели сейчас недоступны, попробуйте позже")
 
             answer = data["message"]["content"]

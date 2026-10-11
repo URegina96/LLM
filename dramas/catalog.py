@@ -19,9 +19,13 @@ def load_catalog() -> tuple[dict, ...]:
 
 
 def parse_min_rating(question: str) -> float:
-    """«выше 8.5», «от 9», «больше 8,7» → 8.5 / 9.0 / 8.7. Не указано — 0."""
-    m = re.search(r"(?:выше|от|больше|>)\s*(\d+(?:[.,]\d+)?)", question.lower())
-    return float(m.group(1).replace(",", ".")) if m else 0.0
+    """«выше 8.5», «от 9», «больше 8,7» → 8.5 / 9.0 / 8.7. Не указано — 0.
+    Рейтинг — число от 0 до 10, поэтому «от 2016 года» рейтингом не считается."""
+    for m in re.finditer(r"(?:\bвыше|\bот|\bбольше|>)\s*(\d{1,2}(?:[.,]\d+)?)(?![\d.,])", question.lower()):
+        value = float(m.group(1).replace(",", "."))
+        if value <= 10:
+            return value
+    return 0.0
 
 
 def search(question: str, catalog: tuple[dict, ...] | None = None, limit: int = 8) -> list[dict]:

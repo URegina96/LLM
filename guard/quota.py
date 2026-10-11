@@ -32,6 +32,36 @@ async def check_and_count_request(username: str, role: str) -> None:
         raise HTTPException(status_code=429, detail=f"Лимит {limit} запросов в день исчерпан")
 
 
+async def refund_request(username: str) -> None:
+    """Возвращает запрос в квоту: модель не ответила, значит, пользователь ничего не получил."""
+    req_key, _ = _keys(username)
+    await redis_client.decr(req_key)
+
+
+# Защита входа от перебора паролей: не больше 5 неудачных попыток на логин за 15 минут
+LOGIN_MAX_FAILURES = 5
+LOGIN_BLOCK_SECONDS = 15 * 60
+
+
+async def check_login_allowed(username: str) -> None:
+    """Слишком много неудачных попыток входа — 429, пароль даже не проверяем."""
+    failures = int(await redis_client.get(f"login_fail:{username}") or 0)
+    if failures >= LOGIN_MAX_FAILURES:
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Попробуйте через 15 минут")
+
+
+async def register_login_failure(username: str) -> None:
+    """+1 неудачная попытка; счётчик сам исчезнет через 15 минут после последней ошибки."""
+    key = f"login_fail:{username}"
+    await redis_client.incr(key)
+    await redis_client.expire(key, LOGIN_BLOCK_SECONDS)
+
+
+async def reset_login_failures(username: str) -> None:
+    """Успешный вход обнуляет счётчик неудачных попыток."""
+    await redis_client.delete(f"login_fail:{username}")
+
+
 async def add_tokens(username: str, tokens: int) -> None:
     """Добавляет потраченные LLM-токены в счётчик пользователя за сегодня."""
     _, tok_key = _keys(username)

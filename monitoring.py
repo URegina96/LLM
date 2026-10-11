@@ -34,14 +34,18 @@ def record_pii(stage: str, labels: list[str]) -> None:
 async def metrics_middleware(request: Request, call_next):
     """Замеряет каждый запрос: время и код ответа."""
     start = time.perf_counter()
-    response = await call_next(request)
-    route = request.scope.get("route")
-    # Шаблон адреса (/admin/models/{model}/down), а не сам адрес — иначе меток станет бесконечно много
-    path = route.path if route else "other"
-    if path != "/metrics":
-        HTTP_REQUESTS.labels(path=path, method=request.method, status=response.status_code).inc()
-        HTTP_LATENCY.labels(path=path).observe(time.perf_counter() - start)
-    return response
+    status = 500  # если обработчик упадёт с исключением, запрос всё равно попадёт в метрики как 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        # Шаблон адреса (/admin/models/{model}/down), а не сам адрес — иначе меток станет бесконечно много
+        path = route.path if route else "other"
+        if path != "/metrics":
+            HTTP_REQUESTS.labels(path=path, method=request.method, status=status).inc()
+            HTTP_LATENCY.labels(path=path).observe(time.perf_counter() - start)
 
 
 # --- Видеокарта: читаем nvidia-smi в момент, когда Prometheus приходит за метриками ---

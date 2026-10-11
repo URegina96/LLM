@@ -1,0 +1,5 @@
+{
+  "admin": {"password_hash": "<хеш из python guard/auth.py>", "role": "admin"},
+  "user": {"password_hash": "<хеш из python guard/auth.py>", "role": "user"},
+  "guest": {"password_hash": "<хеш из python guard/auth.py>", "role": "guest"}
+}

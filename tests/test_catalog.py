@@ -17,6 +17,13 @@ def test_parse_min_rating():
     assert parse_min_rating("просто дораму") == 0.0
 
 
+def test_parse_min_rating_ignores_years():
+    """«от 2016 года» — это год, а не рейтинг: иначе фильтр отсекал бы весь каталог."""
+    assert parse_min_rating("дорама от 2016 года") == 0.0
+    assert parse_min_rating("вышла от 2016 года, рейтинг выше 8") == 8.0
+    assert parse_min_rating("фото 8") == 0.0  # «от» внутри слова — не условие
+
+
 def test_search_by_words():
     """«про любовь» поднимает наверх дораму, где в описании есть «любовь»."""
     assert search("посоветуй дораму про любовь", CATALOG)[0]["title"] == "Токкэби"

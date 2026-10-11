@@ -1,5 +1,7 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import bcrypt
 import jwt
@@ -13,10 +15,18 @@ SECRET_KEY = os.environ["SECRET_KEY"]  # ключ подписи токенов 
 ALGORITHM = "HS256"                    # алгоритм подписи
 TOKEN_TTL_MINUTES = 60                 # сколько живёт токен
 
-# Пользователи. Пароли храним ТОЛЬКО в виде хешей bcrypt.
-USERS = {
-    # пользователи и хеши паролей хранятся вне репозитория (users.json)
-}
+# Пользователи и хеши паролей bcrypt — в users.json, вне Git (шаблон: users.example.json)
+USERS_FILE = Path(os.getenv("USERS_FILE", "users.json"))
+
+
+def load_users() -> dict:
+    """{"логин": {"password_hash": "...", "role": "admin|user|guest"}}. Нет файла — нет пользователей."""
+    if not USERS_FILE.exists():
+        return {}
+    return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+
+
+USERS = load_users()
 
 # RBAC: какие модели разрешены каждой роли
 ROLE_MODELS = {
@@ -73,5 +83,5 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 
 if __name__ == "__main__":
-    # Генератор хешей: python guard/auth.py → ввести пароль → скопировать хеш в USERS
+    # Генератор хешей: python guard/auth.py → ввести пароль → скопировать хеш в users.json
     print(hash_password(input("Пароль: ")))

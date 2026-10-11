@@ -31,6 +31,7 @@ services:
       LANGFUSE_BASE_URL: http://host.docker.internal:3001
     volumes:
       - ./data:/app/data:ro              # каталог дорам берём с диска (только чтение)
+      - ./users.json:/app/users.json:ro  # пользователи и хеши паролей — не в образе, а с диска
     gpus: all                            # доступ к видеокарте: нужен nvidia-smi для метрик GPU
     depends_on:
       postgres:
