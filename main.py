@@ -12,6 +12,7 @@ from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user
 from guard.output import guard_output
 from guard.pii import mask_pii
 from guard.quota import add_tokens, check_and_count_request, get_usage, redis_client
+from monitoring import FALLBACKS, LLM_TOKENS, metrics_endpoint, metrics_middleware, record_pii
 from observability import langfuse
 from router import DOWN_KEY, OLLAMA_BASE, AllModelsFailed, chat_with_fallback
 
@@ -27,6 +28,8 @@ SOURCE_FIELDS = ("title", "original_title", "year", "rating", "genres", "overvie
 
 # это само наше приложение
 app = FastAPI(title="Дорама-GPT")
+# Замер каждого запроса (время, код ответа) для Prometheus
+app.middleware("http")(metrics_middleware)
 
 
 @app.get("/", include_in_schema=False)
@@ -59,6 +62,12 @@ async def fetch_models() -> list[str]:
         r = await client.get(f"{OLLAMA_BASE}/api/tags")
         r.raise_for_status()
     return [m["name"] for m in r.json()["models"]]
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    """Метрики для Prometheus (запросы, задержка, токены, ПД, GPU)."""
+    return metrics_endpoint()
 
 
 @app.get("/health")
@@ -165,6 +174,14 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     tokens = usage["input"] + usage["output"]
     await add_tokens(user["username"], tokens)
+
+    # Метрики для Prometheus
+    LLM_TOKENS.labels(model=answered_by, direction="input").inc(usage["input"])
+    LLM_TOKENS.labels(model=answered_by, direction="output").inc(usage["output"])
+    record_pii("input", list(found.keys()))
+    record_pii("output", leaked)
+    if answered_by != req.model:
+        FALLBACKS.labels(requested=req.model, answered=answered_by).inc()
 
     return ChatResponse(
         answer=safe_answer,

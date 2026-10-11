@@ -1,0 +1,189 @@
+{
+  "uid": "dorama-gateway",
+  "title": "Дорама-GPT: гейтвей и видеокарта",
+  "description": "Нагрузка на гейтвей, скорость ответов, токены, работа Guard и загрузка видеокарты. Данные — из Prometheus, каждые 15 секунд.",
+  "tags": ["дорама-gpt", "llm-gateway"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "schemaVersion": 39,
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Видеокарта",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Загрузка видеокарты, %",
+      "description": "Какой процент времени GPU занята вычислениями. Пики — моменты, когда модель генерирует ответ. Долго около 100% — модель не успевает, запросы стоят в очереди.",
+      "gridPos": { "h": 8, "w": 10, "x": 0, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "gpu_utilization_percent", "legendFormat": "Загрузка" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Видеопамять",
+      "description": "Сколько видеопамяти занято. Когда Ollama загружает модель, память резко растёт (qwen2.5:7b занимает около 5 ГБ). Если занятое упирается во «всего» — модель не влезет и будет работать медленно.",
+      "gridPos": { "h": 8, "w": 9, "x": 10, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "gpu_memory_used_mb", "legendFormat": "Занято" },
+        { "refId": "B", "expr": "gpu_memory_total_mb", "legendFormat": "Всего" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "decmbytes", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Всего" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } }
+            ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "type": "gauge",
+      "title": "Температура видеокарты",
+      "description": "Текущая температура GPU. До 70 °C — норма, 70–85 °C — нагружена, выше 85 °C — перегрев.",
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "gpu_temperature_celsius", "legendFormat": "Температура" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius", "min": 20, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 70 },
+            { "color": "red", "value": 85 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdMarkers": true }
+    },
+    {
+      "type": "row",
+      "title": "Гейтвей",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Вопросов в чат, в минуту",
+      "description": "Сколько запросов к /chat приходит в минуту (среднее за 5 минут). Показывает нагрузку на гейтвей.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(gateway_http_requests_total{path=\"/chat\"}[5m])) * 60", "legendFormat": "Вопросов в минуту" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "decimals": 1, "custom": { "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Время ответа чата",
+      "description": "Медиана — половина ответов быстрее этого времени. 95-й процентиль — 95% ответов быстрее этого времени (так обычно формулируют SLO: «95% ответов быстрее N секунд»).",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(gateway_http_request_seconds_bucket{path=\"/chat\"}[5m])))", "legendFormat": "Медиана" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(gateway_http_request_seconds_bucket{path=\"/chat\"}[5m])))", "legendFormat": "95% ответов быстрее" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки по кодам ответа",
+      "description": "Сколько ответов с ошибкой за последний час: 401 — не вошли или токен истёк, 403 — нет прав, 429 — исчерпан дневной лимит, 503 — все модели недоступны.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (increase(gateway_http_requests_total{status=~\"4..|5..\"}[1h]))", "legendFormat": "Код {{status}}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 } },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "type": "row",
+      "title": "Модели и защита данных",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "LLM-токены за выбранный период",
+      "description": "Сколько токенов потратила каждая модель: «вопрос» — что мы отправили модели (вместе с каталогом дорам), «ответ» — что она написала. Для платных моделей именно это превращается в деньги.",
+      "gridPos": { "h": 8, "w": 10, "x": 0, "y": 19 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (model) (increase(gateway_llm_tokens_total{direction=\"input\"}[$__range]))", "legendFormat": "{{model}} — вопрос", "instant": true },
+        { "refId": "B", "expr": "sum by (model) (increase(gateway_llm_tokens_total{direction=\"output\"}[$__range]))", "legendFormat": "{{model}} — ответ", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "decimals": 0, "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "bargauge",
+      "title": "Guard: спрятано личных данных",
+      "description": "Сколько персональных данных Guard замаскировал с момента запуска сервера: «вход» — в вопросах пользователей (до модели), «выход» — в ответах модели (до пользователя).",
+      "gridPos": { "h": 8, "w": 9, "x": 10, "y": 19 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (gateway_pii_masked_total{stage=\"input\"})", "legendFormat": "{{kind}} — вход", "instant": true },
+        { "refId": "B", "expr": "sum by (kind) (gateway_pii_masked_total{stage=\"output\"})", "legendFormat": "{{kind}} — выход", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "decimals": 0, "color": { "mode": "fixed", "fixedColor": "purple" } },
+        "overrides": []
+      },
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Ответила запасная модель",
+      "description": "Сколько раз за выбранный период основная модель не ответила и сработал fallback. Больше нуля — повод посмотреть трейсы в Langfuse.",
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 19 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(gateway_fallbacks_total[$__range])) or vector(0)", "legendFormat": "Fallback", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    }
+  ]
+}

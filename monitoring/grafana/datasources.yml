@@ -1,0 +1,8 @@
+# Grafana при запуске сама подключит Prometheus как источник данных
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090   # имя сервиса из docker-compose, внутри сети Docker
+    isDefault: true

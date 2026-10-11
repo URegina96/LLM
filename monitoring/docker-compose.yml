@@ -1,0 +1,30 @@
+# Мониторинг гейтвея: Prometheus собирает метрики, Grafana рисует графики
+name: dorama-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    ports:
+      - "127.0.0.1:9095:9090"            # 9090 у тебя занят MinIO от Langfuse
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus      # история метрик переживает перезапуск
+    # host.docker.internal (твой компьютер) Docker Desktop знает сам — ничего добавлять не нужно
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    ports:
+      - "127.0.0.1:3002:3000"            # 3000 — старая Grafana, 3001 — Langfuse
+    volumes:
+      - ./grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro  # где искать дашборды
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro                                  # сами дашборды (JSON)
+      - grafana_data:/var/lib/grafana    # пароль и ручные настройки сохраняются
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:

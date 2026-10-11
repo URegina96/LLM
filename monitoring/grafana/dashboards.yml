@@ -1,0 +1,9 @@
+# Grafana при запуске загрузит все дашборды (JSON) из папки /etc/grafana/dashboards
+apiVersion: 1
+providers:
+  - name: dorama
+    folder: Дорама-GPT          # папка в списке дашбордов
+    type: file
+    allowUiUpdates: true        # можно двигать панели в интерфейсе (но при перезапуске вернётся версия из файла)
+    options:
+      path: /etc/grafana/dashboards

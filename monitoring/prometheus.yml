@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s   # раз в 15 секунд забирать метрики
+
+scrape_configs:
+  - job_name: dorama-gateway
+    metrics_path: /metrics
+    static_configs:
+      # host.docker.internal — это твой компьютер, если смотреть изнутри контейнера
+      - targets: ["host.docker.internal:8000"]

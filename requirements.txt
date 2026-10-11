@@ -14,3 +14,5 @@ redis  # клиент для Redis
 langfuse  # SDK для отправки трейсов в Langfuse
 
 pytest  # запуск тестов
+
+prometheus-client  # метрики для Prometheus
