@@ -1,7 +1,9 @@
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
+from guard.auth import ROLE_MODELS, authenticate, create_token, get_current_user
 from guard.pii import mask_pii
 
 # Адрес Ollama и модель по умолчанию
@@ -40,18 +42,35 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/models")
-async def list_models() -> list[str]:
-    """Список доступных моделей"""
-    return await fetch_models()
+@app.post("/token")
+def login(form: OAuth2PasswordRequestForm = Depends()):
+    """Логин: проверяет логин и пароль и выдаёт JWT-токен."""
+    user = authenticate(form.username, form.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    return {"access_token": create_token(user["username"], user["role"]), "token_type": "bearer"}
 
+
+@app.get("/me")
+def me(user: dict = Depends(get_current_user)):
+    """Кто я: данные из токена"""
+    return user
+
+@app.get("/models")
+async def list_models(user: dict = Depends(get_current_user)) -> list[str]:
+    """Список моделей, доступных роли пользователя"""
+    allowed = ROLE_MODELS[user["role"]]
+    return [m for m in await fetch_models() if m in allowed]
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    """Проверяет модель, прячет личные данные, передаёт вопрос в Ollama и возвращает ответ"""
-    # Нет такой модели — сразу ошибка 400, в Ollama не ходим
+async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
+    """Проверяет модель и права, прячет личные данные, передаёт вопрос в Ollama"""
+    # Нет такой модели — 400
     if req.model not in await fetch_models():
         raise HTTPException(status_code=400, detail=f"Модель '{req.model}' недоступна")
+    # Модель есть, но роли она не разрешена — 403
+    if req.model not in ROLE_MODELS[user["role"]]:
+        raise HTTPException(status_code=403, detail=f"Роли '{user['role']}' модель '{req.model}' запрещена")
 
     masked, found = mask_pii(req.message)  # Guard входа: прячем личные данные
 
